@@ -117,6 +117,32 @@ options:
     choices: [ default, ACCEPT, DROP, "%%REJECT%%" ]
     type: str
     version_added: 1.2.0
+  direct_rule:
+    description:
+      - The firewalld iptables direct rule you would like to enable/disable.
+    type: str
+    version_added: "2.10"
+  chain:
+    description:
+      - The iptables chain in which to insert the direct_rule, used with the C(direct_rule) option.
+    type: str
+    version_added: "2.10"
+  table:
+    description:
+      - 'The iptables table in which to insert the direct_rule, used with the C(direct_rule) option.'
+    version_added: "2.10"
+    type: str
+  fw_family:
+    description:
+      - 'The ip address family for the firewall direct_rule (C(ipv4) or C(ipv6)), used with the C(direct_rule) option.'
+    version_added: "2.10"
+    type: str
+    choices: [ ipv4, ipv6 ]
+  rule_priority:
+    description:
+      - 'The priority of the direct firewalld iptables rule, used with the C(direct_rule) option.'
+    version_added: "2.10"
+    type: int
 notes:
   - Not tested on any Debian based system.
   - Requires the python2 bindings of firewalld, which may not be installed by default.
@@ -206,13 +232,44 @@ EXAMPLES = r'''
     permanent: yes
     target: ACCEPT
 
-- name: Redirect port 443 to 8443 with Rich Rule
+- name: Redirect port 443 to 8443 with Rich Rule for ipv4 and ipv6
   ansible.posix.firewalld:
     rich_rule: rule family=ipv4 forward-port port=443 protocol=tcp to-port=8443
     zone: public
     permanent: yes
     immediate: yes
     state: enabled
+
+- name: Ensures a chain named 'sshg' exists on table 'filter'
+  firewalld:
+    chain: sshg
+    fw_family: ipv4
+    table: filter
+    permanent: true
+    state: enabled
+- name: Ensures there is a direct rule on chain 'sshg' and table 'filter' to accept packets on TCP port 332
+  firewalld:
+    chain: sshg
+    fw_family: ipv4
+    table: filter
+    direct_rule: -m tcp -p tcp --dport 332 -j ACCEPT
+    permanent: true
+    state: enabled
+- name: Ensures there is NO direct rule on chain 'sshg' and table 'filter' to accept packets on TCP port 332
+  firewalld:
+    chain: sshg
+    fw_family: ipv4
+    table: filter
+    direct_rule: -m tcp -p tcp --dport 332 -j ACCEPT
+    permanent: true
+    state: disabled
+- name: Ensures there is NO chain named 'sshg' exists on table 'filter'
+  firewalld:
+    chain: sshg
+    fw_family: ipv4
+    table: filter
+    permanent: true
+    state: disabled
 '''
 
 from ansible.module_utils.basic import AnsibleModule
@@ -342,6 +399,92 @@ class ServiceTransaction(FirewallTransaction):
         fw_settings.removeService(service)
         self.update_fw_settings(fw_zone, fw_settings)
 
+class DirectRuleTransaction(FirewallTransaction):
+    """
+    DirectRuleTransaction
+    """
+
+    def __init__(self, module, action_args=None, zone=None, desired_state=None, permanent=False, immediate=False):
+        super(DirectRuleTransaction, self).__init__(
+            module, action_args=action_args, desired_state=desired_state, zone=zone, permanent=permanent, immediate=immediate)
+
+    def get_enabled_immediate(self, direct_rule, rule_priority, chain, table, fw_family):
+        fw, fwd = self.get_direct_settings()
+        if chain is not None and chain in fw.getChains(ipv=fw_family, table=table) and direct_rule is None:
+            return True
+        elif chain is not None and chain not in fw.getChains(ipv=fw_family, table=table) and direct_rule is None:
+            return False
+        elif (chain is not None) and direct_rule is not None and fw.queryRule(ipv=fw_family, table=table, chain=chain,
+                                                                              priority=rule_priority,
+                                                                              args=direct_rule.split()):
+            return True
+        elif (chain is not None) and direct_rule is not None and not fw.queryRule(ipv=fw_family, table=table,
+                                                                                  chain=chain, priority=rule_priority,
+                                                                                  args=direct_rule.split()):
+            return False
+        elif (chain is None) and fwd.queryPassthrough(ipv=fw_family, args=direct_rule.split()):
+            return True
+        elif (chain is None) and not fwd.queryPassthrough(ipv=fw_family, args=direct_rule.split()):
+            return False
+        return True
+
+    def get_enabled_permanent(self, direct_rule, rule_priority, chain, table, fw_family):
+        fw, fwd = self.get_direct_settings()
+        if (chain in fwd.getChains(ipv=fw_family, table=table)) and direct_rule is None:
+            return True
+        elif (chain not in fwd.getChains(ipv=fw_family, table=table)) and direct_rule is None:
+            return False
+        elif (chain is not None) and direct_rule is not None and fwd.queryRule(ipv=fw_family, table=table, chain=chain,
+                                                                               priority=rule_priority,
+                                                                               args=direct_rule.split()):
+            return True
+        elif (chain is not None) and direct_rule is not None and not fwd.queryRule(ipv=fw_family, table=table,
+                                                                                   chain=chain, priority=rule_priority,
+                                                                                   args=direct_rule.split()):
+            return False
+        elif (chain is None) and fwd.queryPassthrough(ipv=fw_family, args=direct_rule.split()):
+            return True
+        elif (chain is None) and not fwd.queryPassthrough(ipv=fw_family, args=direct_rule.split()):
+            return False
+        return True
+
+    def set_enabled_immediate(self, direct_rule, rule_priority, chain, table, fw_family):
+        if direct_rule is None:
+            self.fw.addChain(ipv=fw_family, table=table, chain=chain)
+        elif direct_rule is not None and chain is not None:
+            self.fw.addRule(ipv=fw_family, table=table, chain=chain, priority=rule_priority, args=direct_rule.split())
+        elif chain is None:
+            self.fw.addPassthrough(ipv=fw_family, args=direct_rule.split())
+
+    def set_enabled_permanent(self, direct_rule, rule_priority, chain, table, fw_family):
+        fw, fwd = self.get_direct_settings()
+        if direct_rule is None:
+            fwd.addChain(ipv=fw_family, table=table, chain=chain)
+        elif direct_rule is not None and chain is not None:
+            fwd.addRule(ipv=fw_family, table=table, chain=chain, priority=rule_priority, args=direct_rule.split())
+        elif chain is None:
+            fwd.addPassthrough(ipv=fw_family, args=direct_rule.split())
+        self.update_direct_settings(fw=fw, fw_settings=fwd)
+
+    def set_disabled_immediate(self, direct_rule, rule_priority, chain, table, fw_family):
+        if direct_rule is None:
+            self.fw.removeChain(ipv=fw_family, table=table, chain=chain)
+        elif direct_rule is not None and chain is not None:
+            self.fw.removeRule(ipv=fw_family, table=table, chain=chain, priority=rule_priority,
+                               args=direct_rule.split())
+        elif chain is None:
+            self.fw.removePassthrough(ipv=fw_family, args=direct_rule.split())
+
+    def set_disabled_permanent(self, direct_rule, rule_priority, chain, table, fw_family):
+        fw, fwd = self.get_direct_settings()
+        if direct_rule is None:
+            fwd.removeChain(ipv=fw_family, table=table, chain=chain)
+        elif direct_rule is not None and chain is not None:
+            fwd.removeRule(ipv=fw_family, table=table, chain=chain, priority=rule_priority,
+                           args=direct_rule.split())
+        elif chain is None:
+            fwd.removePassthrough(ipv=fw_family, args=direct_rule.split())
+        self.update_direct_settings(fw=fw, fw_settings=fwd)
 
 class MasqueradeTransaction(FirewallTransaction):
     """
@@ -753,6 +896,11 @@ def main():
             masquerade=dict(type='str'),
             offline=dict(type='bool'),
             target=dict(type='str', choices=['default', 'ACCEPT', 'DROP', '%%REJECT%%']),
+            chain=dict(type='str'),
+            table=dict(type='str'),
+            direct_rule=dict(type='str'),
+            fw_family=dict(type='str', choices=['ipv4', 'ipv6']),
+            rule_priority=dict(type='int', default=0),
         ),
         supports_check_mode=True,
         required_by=dict(
@@ -772,6 +920,11 @@ def main():
     timeout = module.params['timeout']
     interface = module.params['interface']
     masquerade = module.params['masquerade']
+    chain = module.params['chain']
+    direct_rule = module.params['direct_rule']
+    fw_family = module.params['fw_family']
+    rule_priority = module.params['rule_priority']
+    table = module.params['table']
 
     # Sanity checks
     FirewallTransaction.sanity_check(module)
@@ -822,7 +975,7 @@ def main():
 
     modification = False
     if any([icmp_block, icmp_block_inversion, service, port, port_forward, rich_rule,
-            interface, masquerade, source, target]):
+            interface, masquerade, source, target, chain, direct_rule]):
         modification = True
     if modification and desired_state in ['absent', 'present'] and target is None:
         module.fail_json(
@@ -941,6 +1094,26 @@ def main():
                     ), desired_state
                 )
             )
+
+    if (direct_rule is None and chain is not None) or\
+            (direct_rule is not None and chain is not None and table is not None) or\
+            (direct_rule is not None and chain is None and table is None):
+        transaction = DirectRuleTransaction(
+            module,
+            action_args=(direct_rule, rule_priority, chain, table, fw_family),
+            zone=zone,
+            desired_state=desired_state,
+            permanent=permanent,
+            immediate=immediate,
+        )
+
+        changed, transaction_msgs = transaction.run()
+        msgs = msgs + transaction_msgs
+        if changed is True and (direct_rule is None and chain is not None):
+            msgs.append("Changed chain %s to %s" % (chain, desired_state))
+
+        if changed is True and (direct_rule is not None and chain is None):
+            msgs.append("Changed rule %s to %s" % (direct_rule, desired_state))
 
     if rich_rule is not None:
 

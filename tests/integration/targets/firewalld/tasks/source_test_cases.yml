@@ -27,7 +27,7 @@
 - name: assert firewalld source test permanent enabled worked
   assert:
     that:
-    - result is changed
+      - result is changed
 
 - name: firewalld source test permanent enabled rerun (verify not changed)
   firewalld:
@@ -40,7 +40,7 @@
 - name: assert firewalld source test permanent enabled rerun worked (verify not changed)
   assert:
     that:
-    - result is not changed
+      - result is not changed
 
 - name: firewalld source test permanent disabled
   firewalld:
@@ -53,7 +53,7 @@
 - name: assert firewalld source test permanent disabled worked
   assert:
     that:
-    - result is changed
+      - result is changed
 
 - name: firewalld source test permanent disabled rerun (verify not changed)
   firewalld:
@@ -66,7 +66,7 @@
 - name: assert firewalld source test permanent disabled rerun worked (verify not changed)
   assert:
     that:
-    - result is not changed
+      - result is not changed
 
 - name: firewalld source test permanent enabled is exclusive (verify exclusive error)
   firewalld:
@@ -81,5 +81,5 @@
 - name: assert firewalld source test permanent enabled is exclusive (verify exclusive error)
   assert:
     that:
-    - result is not changed
-    - "result.msg == 'parameters are mutually exclusive: icmp_block|icmp_block_inversion|service|port|port_forward|rich_rule|interface|masquerade|source|target'"
+      - result is not changed
+      - "result.msg == 'parameters are mutually exclusive: icmp_block|icmp_block_inversion|service|port|port_forward|rich_rule|interface|masquerade|source|target|source|direct_rule'"
